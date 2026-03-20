@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     console.error(error);
     const message =
       error instanceof Error && error.message.startsWith("Missing environment variable:")
-        ? "Серверная часть ещё не настроена. Заполните .env.local и Supabase перед приёмом заявок."
+        ? "Серверная часть ещё не настроена. Для приёма заявок нужен Telegram token, а для mini-CRM дополнительно Supabase."
         : error instanceof Error
           ? error.message
           : "Не удалось отправить заявку.";

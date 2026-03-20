@@ -1,4 +1,4 @@
-import { getSiteUrl, getTelegramEnv } from "@/lib/env";
+import { getSiteUrl, getTelegramEnv, hasServerSupabaseEnv } from "@/lib/env";
 import { getServiceSupabaseClient } from "@/lib/supabase/service";
 import type {
   ConsultationLeadPayload,
@@ -92,6 +92,10 @@ function formatLeadStatus(status: LeadStatus) {
   return dictionary[status];
 }
 
+function hasAdminStorage() {
+  return hasServerSupabaseEnv();
+}
+
 function buildTelegramMessage(lead: LeadRecord) {
   const adminUrl = `${getSiteUrl().replace(/\/$/, "")}/admin`;
   const meta = lead.lead_meta?.[0];
@@ -136,8 +140,13 @@ function buildTelegramMessage(lead: LeadRecord) {
     );
   }
 
-  lines.push("");
-  lines.push(`Админка: ${adminUrl}`);
+  if (hasAdminStorage()) {
+    lines.push("");
+    lines.push(`Админка: ${adminUrl}`);
+  } else {
+    lines.push("");
+    lines.push("Режим: Telegram-only, без подключённой mini-CRM");
+  }
 
   return lines.join("\n");
 }
@@ -168,6 +177,55 @@ export async function sendLeadToTelegram(lead: LeadRecord) {
 }
 
 export async function createLead(payload: LeadPayload) {
+  if (!hasAdminStorage()) {
+    const timestamp = new Date().toISOString();
+    const fallbackLead: LeadRecord = {
+      id: crypto.randomUUID(),
+      created_at: timestamp,
+      updated_at: timestamp,
+      lead_type: payload.leadType,
+      status: "new",
+      name: payload.name.trim(),
+      contact: payload.contact.trim(),
+      city_timezone: normalizeEmpty(payload.cityTimezone),
+      age_range: payload.leadType === "mentoring" ? payload.ageRange.trim() : null,
+      goal: payload.leadType === "mentoring" ? payload.goal.trim() : null,
+      training_background:
+        payload.leadType === "mentoring" ? payload.trainingBackground.trim() : null,
+      blockers: payload.leadType === "mentoring" ? payload.blockers.trim() : null,
+      expectations: payload.leadType === "mentoring" ? payload.expectations.trim() : null,
+      readiness: payload.leadType === "mentoring" ? payload.readiness.trim() : null,
+      question_for_ulyana:
+        payload.leadType === "mentoring" ? payload.questionForUlyana.trim() : null,
+      question_description:
+        payload.leadType === "consultation" ? payload.questionDescription.trim() : null,
+      extra_notes:
+        payload.leadType === "mentoring" ? normalizeEmpty(payload.extraNotes) : null,
+      internal_note: null,
+      contacted_at: null,
+      consent_privacy: payload.consentPrivacy,
+      consent_pd: payload.consentPd,
+      source: payload.source,
+      lead_meta: [
+        {
+          lead_id: "telegram-only",
+          utm_source: normalizeEmpty(payload.meta?.utmSource),
+          utm_medium: normalizeEmpty(payload.meta?.utmMedium),
+          utm_campaign: normalizeEmpty(payload.meta?.utmCampaign),
+          referer: normalizeEmpty(payload.meta?.referer),
+          locale: normalizeEmpty(payload.meta?.locale),
+          device: normalizeEmpty(payload.meta?.device),
+          started_at: normalizeEmpty(payload.meta?.startedAt),
+          submitted_step_count: payload.meta?.submittedStepCount ?? null
+        }
+      ]
+    };
+
+    await sendLeadToTelegram(fallbackLead);
+
+    return fallbackLead;
+  }
+
   const supabase = getServiceSupabaseClient();
   const insert = createLeadInsert(payload);
 
