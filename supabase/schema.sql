@@ -72,6 +72,13 @@ for select
 to authenticated
 using (true);
 
+drop policy if exists "anon can insert leads" on public.leads;
+create policy "anon can insert leads"
+on public.leads
+for insert
+to anon
+with check (true);
+
 drop policy if exists "authenticated can update leads" on public.leads;
 create policy "authenticated can update leads"
 on public.leads
@@ -86,6 +93,13 @@ on public.lead_meta
 for select
 to authenticated
 using (true);
+
+drop policy if exists "anon can insert lead meta" on public.lead_meta;
+create policy "anon can insert lead meta"
+on public.lead_meta
+for insert
+to anon
+with check (true);
 
 comment on table public.leads is 'Заявки с лендинга Ульяны Гойхман';
 comment on table public.lead_meta is 'Маркетинговые и технические метаданные по заявке';

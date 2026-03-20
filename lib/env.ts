@@ -16,10 +16,6 @@ export function hasPublicSupabaseEnv() {
   return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 }
 
-export function hasServerSupabaseEnv() {
-  return Boolean(hasPublicSupabaseEnv() && process.env.SUPABASE_SERVICE_ROLE_KEY);
-}
-
 export function hasTelegramEnv() {
   return Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);
 }
@@ -28,13 +24,6 @@ export function getPublicSupabaseEnv() {
   return {
     url: readEnv("NEXT_PUBLIC_SUPABASE_URL"),
     anonKey: readEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-  };
-}
-
-export function getServerSupabaseEnv() {
-  return {
-    ...getPublicSupabaseEnv(),
-    serviceRoleKey: readEnv("SUPABASE_SERVICE_ROLE_KEY")
   };
 }
 

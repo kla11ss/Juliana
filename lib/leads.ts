@@ -1,5 +1,8 @@
-import { getSiteUrl, getTelegramEnv, hasServerSupabaseEnv } from "@/lib/env";
-import { getServiceSupabaseClient } from "@/lib/supabase/service";
+import { createClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+import { getPublicSupabaseEnv, getSiteUrl, getTelegramEnv, hasPublicSupabaseEnv } from "@/lib/env";
+import type { Database } from "@/lib/database";
 import type {
   ConsultationLeadPayload,
   LeadPayload,
@@ -9,6 +12,52 @@ import type {
   LeadUpdateInput,
   MentoringLeadPayload
 } from "@/lib/types";
+
+let anonClient: SupabaseClient<Database> | null = null;
+let schemaProbe: Promise<boolean> | null = null;
+
+function getAnonSupabaseClient() {
+  if (anonClient) {
+    return anonClient;
+  }
+
+  const { url, anonKey } = getPublicSupabaseEnv();
+
+  anonClient = createClient<Database>(url, anonKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
+  });
+
+  return anonClient;
+}
+
+async function isSupabaseSchemaReady() {
+  if (!hasPublicSupabaseEnv()) {
+    return false;
+  }
+
+  if (!schemaProbe) {
+    const { url, anonKey } = getPublicSupabaseEnv();
+
+    schemaProbe = fetch(`${url}/rest/v1/leads?select=id&limit=1`, {
+      headers: {
+        apikey: anonKey,
+        Authorization: `Bearer ${anonKey}`
+      },
+      cache: "no-store"
+    })
+      .then(async (response) => {
+        const text = await response.text();
+
+        return !text.includes("\"PGRST205\"");
+      })
+      .catch(() => false);
+  }
+
+  return schemaProbe;
+}
 
 function normalizeEmpty(value?: string) {
   if (!value) {
@@ -20,8 +69,11 @@ function normalizeEmpty(value?: string) {
   return trimmed.length ? trimmed : null;
 }
 
-function createLeadInsert(payload: LeadPayload) {
+function createLeadInsert(payload: LeadPayload, id: string, timestamp: string) {
   const base = {
+    id,
+    created_at: timestamp,
+    updated_at: timestamp,
     lead_type: payload.leadType,
     name: payload.name.trim(),
     contact: payload.contact.trim(),
@@ -93,7 +145,16 @@ function formatLeadStatus(status: LeadStatus) {
 }
 
 function hasAdminStorage() {
-  return hasServerSupabaseEnv();
+  return hasPublicSupabaseEnv();
+}
+
+function isSupabaseSchemaMissing(message: string, code?: string) {
+  return (
+    code === "PGRST205" ||
+    message.includes("schema cache") ||
+    message.includes("Could not find the table") ||
+    message.includes("relation") && message.includes("does not exist")
+  );
 }
 
 function buildTelegramMessage(lead: LeadRecord) {
@@ -153,6 +214,9 @@ function buildTelegramMessage(lead: LeadRecord) {
 
 export async function sendLeadToTelegram(lead: LeadRecord) {
   const { botToken, chatId } = getTelegramEnv();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+
   const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
     method: "POST",
     headers: {
@@ -162,8 +226,9 @@ export async function sendLeadToTelegram(lead: LeadRecord) {
       chat_id: chatId,
       text: buildTelegramMessage(lead),
       disable_web_page_preview: true
-    })
-  });
+    }),
+    signal: controller.signal
+  }).finally(() => clearTimeout(timeoutId));
 
   if (!response.ok) {
     throw new Error("Telegram API request failed.");
@@ -177,102 +242,102 @@ export async function sendLeadToTelegram(lead: LeadRecord) {
 }
 
 export async function createLead(payload: LeadPayload) {
-  if (!hasAdminStorage()) {
-    const timestamp = new Date().toISOString();
-    const fallbackLead: LeadRecord = {
-      id: crypto.randomUUID(),
-      created_at: timestamp,
-      updated_at: timestamp,
-      lead_type: payload.leadType,
-      status: "new",
-      name: payload.name.trim(),
-      contact: payload.contact.trim(),
-      city_timezone: normalizeEmpty(payload.cityTimezone),
-      age_range: payload.leadType === "mentoring" ? payload.ageRange.trim() : null,
-      goal: payload.leadType === "mentoring" ? payload.goal.trim() : null,
-      training_background:
-        payload.leadType === "mentoring" ? payload.trainingBackground.trim() : null,
-      blockers: payload.leadType === "mentoring" ? payload.blockers.trim() : null,
-      expectations: payload.leadType === "mentoring" ? payload.expectations.trim() : null,
-      readiness: payload.leadType === "mentoring" ? payload.readiness.trim() : null,
-      question_for_ulyana:
-        payload.leadType === "mentoring" ? payload.questionForUlyana.trim() : null,
-      question_description:
-        payload.leadType === "consultation" ? payload.questionDescription.trim() : null,
-      extra_notes:
-        payload.leadType === "mentoring" ? normalizeEmpty(payload.extraNotes) : null,
-      internal_note: null,
-      contacted_at: null,
-      consent_privacy: payload.consentPrivacy,
-      consent_pd: payload.consentPd,
-      source: payload.source,
-      lead_meta: [
-        {
-          lead_id: "telegram-only",
-          utm_source: normalizeEmpty(payload.meta?.utmSource),
-          utm_medium: normalizeEmpty(payload.meta?.utmMedium),
-          utm_campaign: normalizeEmpty(payload.meta?.utmCampaign),
-          referer: normalizeEmpty(payload.meta?.referer),
-          locale: normalizeEmpty(payload.meta?.locale),
-          device: normalizeEmpty(payload.meta?.device),
-          started_at: normalizeEmpty(payload.meta?.startedAt),
-          submitted_step_count: payload.meta?.submittedStepCount ?? null
-        }
-      ]
-    };
+  const timestamp = new Date().toISOString();
+  const leadId = crypto.randomUUID();
+  const fallbackLead: LeadRecord = {
+    id: leadId,
+    created_at: timestamp,
+    updated_at: timestamp,
+    lead_type: payload.leadType,
+    status: "new",
+    name: payload.name.trim(),
+    contact: payload.contact.trim(),
+    city_timezone: normalizeEmpty(payload.cityTimezone),
+    age_range: payload.leadType === "mentoring" ? payload.ageRange.trim() : null,
+    goal: payload.leadType === "mentoring" ? payload.goal.trim() : null,
+    training_background:
+      payload.leadType === "mentoring" ? payload.trainingBackground.trim() : null,
+    blockers: payload.leadType === "mentoring" ? payload.blockers.trim() : null,
+    expectations: payload.leadType === "mentoring" ? payload.expectations.trim() : null,
+    readiness: payload.leadType === "mentoring" ? payload.readiness.trim() : null,
+    question_for_ulyana:
+      payload.leadType === "mentoring" ? payload.questionForUlyana.trim() : null,
+    question_description:
+      payload.leadType === "consultation" ? payload.questionDescription.trim() : null,
+    extra_notes:
+      payload.leadType === "mentoring" ? normalizeEmpty(payload.extraNotes) : null,
+    internal_note: null,
+    contacted_at: null,
+    consent_privacy: payload.consentPrivacy,
+    consent_pd: payload.consentPd,
+    source: payload.source,
+    lead_meta: [
+      {
+        lead_id: leadId,
+        utm_source: normalizeEmpty(payload.meta?.utmSource),
+        utm_medium: normalizeEmpty(payload.meta?.utmMedium),
+        utm_campaign: normalizeEmpty(payload.meta?.utmCampaign),
+        referer: normalizeEmpty(payload.meta?.referer),
+        locale: normalizeEmpty(payload.meta?.locale),
+        device: normalizeEmpty(payload.meta?.device),
+        started_at: normalizeEmpty(payload.meta?.startedAt),
+        submitted_step_count: payload.meta?.submittedStepCount ?? null
+      }
+    ]
+  };
 
+  if (!hasAdminStorage()) {
     await sendLeadToTelegram(fallbackLead);
 
     return fallbackLead;
   }
 
-  const supabase = getServiceSupabaseClient();
-  const insert = createLeadInsert(payload);
+  if (!(await isSupabaseSchemaReady())) {
+    await sendLeadToTelegram(fallbackLead);
 
-  const { data: insertedLead, error } = await supabase
-    .from("leads")
-    .insert(insert)
-    .select("*")
-    .single();
-
-  if (error || !insertedLead) {
-    throw new Error(error?.message || "Could not create lead.");
+    return fallbackLead;
   }
 
-  const lead = insertedLead as { id: string };
+  const supabase = getAnonSupabaseClient();
+  const insert = createLeadInsert(payload, leadId, timestamp);
+
+  const { error } = await supabase.from("leads").insert(insert);
+
+  if (error) {
+    if (isSupabaseSchemaMissing(error.message, error.code)) {
+      await sendLeadToTelegram(fallbackLead);
+
+      return fallbackLead;
+    }
+
+    throw new Error(error.message || "Could not create lead.");
+  }
 
   const { error: metaError } = await supabase
     .from("lead_meta")
-    .upsert(createMetaInsert(lead.id, payload), {
-      onConflict: "lead_id"
-    });
+    .insert(createMetaInsert(leadId, payload));
 
   if (metaError) {
+    if (isSupabaseSchemaMissing(metaError.message, metaError.code)) {
+      await sendLeadToTelegram(fallbackLead);
+
+      return fallbackLead;
+    }
+
     throw new Error(metaError.message);
   }
 
-  const { data: fullLead, error: fullLeadError } = await supabase
-    .from("leads")
-    .select("*, lead_meta(*)")
-    .eq("id", lead.id)
-    .single();
-
-  if (fullLeadError || !fullLead) {
-    throw new Error(fullLeadError?.message || "Could not reload lead.");
-  }
-
   try {
-    await sendLeadToTelegram(fullLead as LeadRecord);
+    await sendLeadToTelegram(fallbackLead);
   } catch (telegramError) {
     console.error("Telegram notification failed", telegramError);
   }
 
-  return fullLead as LeadRecord;
+  return fallbackLead;
 }
 
-export async function listLeads() {
-  const supabase = getServiceSupabaseClient();
-  const { data, error } = await supabase
+export async function listLeads(client: SupabaseClient<Database>) {
+  const { data, error } = await client
     .from("leads")
     .select("*, lead_meta(*)")
     .order("created_at", { ascending: false });
@@ -284,8 +349,11 @@ export async function listLeads() {
   return (data || []) as LeadRecord[];
 }
 
-export async function updateLead(id: string, input: LeadUpdateInput) {
-  const supabase = getServiceSupabaseClient();
+export async function updateLead(
+  client: SupabaseClient<Database>,
+  id: string,
+  input: LeadUpdateInput
+) {
   const patch: Record<string, string | null> = {};
 
   if (input.status) {
@@ -300,7 +368,7 @@ export async function updateLead(id: string, input: LeadUpdateInput) {
     patch.contacted_at = input.contactedAt;
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await client
     .from("leads")
     .update(patch)
     .eq("id", id)

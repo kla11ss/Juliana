@@ -5,9 +5,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const isSupabaseConfigured = Boolean(
-    process.env.NEXT_PUBLIC_SUPABASE_URL &&
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY &&
-      process.env.SUPABASE_SERVICE_ROLE_KEY
+    process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   );
 
   if (!isSupabaseConfigured) {
@@ -17,8 +15,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <p className="section-kicker">Mini-CRM</p>
           <h1>Нужна настройка окружения</h1>
           <p>
-            Для работы админки нужно заполнить <code>.env.local</code> переменными Supabase и
-            Telegram, а затем применить SQL-схему из <code>supabase/schema.sql</code>.
+            Для работы админки нужно заполнить <code>.env.local</code> переменными Supabase, а
+            затем применить SQL-схему из <code>supabase/schema.sql</code>.
           </p>
         </div>
       </main>
